@@ -28,9 +28,13 @@ item dell_dup            Dell Update Packages (FreeDOS) -- BIOS/iDRAC/PERC flash
 item dell_sbuu           Systems Build and Update Utility (SBUU)
 item dell_omsa           OpenManage Server Administrator Live
 item freedos             FreeDOS 1.4 LiveCD (bare, no DUPs)
+item --gap -- Deesh images
+item deesh_freedos       deesh FreeDOS v2.5
+item deesh_linux         deesh Linux v2.3
 item --gap -- Diagnostics and rescue
 item alpine_rescue       Alpine Linux rescue shell (smartctl / nvme-cli / megacli)
 item alpine_rescue_ssh   Alpine rescue + SSH daemon (headless)
+item usb_boot            Boot local USB stick (Ventoy etc.)
 item --gap --
 item custom_exit         Back to netboot.xyz main menu
 choose --default alpine_rescue custom_choice || goto custom_exit
@@ -67,6 +71,39 @@ imgfree
 kernel ${memdisk} iso raw
 initrd ${custom_base}/FD14-LiveCD.iso
 boot || goto custom_menu
+
+# --- Deesh images ------------------------------------------------------------
+# iPXE has no local-filesystem driver: these ISOs cannot be read off a USB stick,
+# they must be reachable over HTTP. Simplest host is a one-liner next to the ISOs:
+#   python3 -m http.server 8080
+# then point custom_base at http://<that-host>:8080.
+
+# DOS-based, so memdisk + legacy BIOS boot mode.
+:deesh_freedos
+iseq ${platform} efi && echo deesh FreeDOS requires legacy BIOS mode && sleep 5 && goto custom_menu ||
+imgfree
+kernel ${memdisk} iso raw
+initrd ${custom_base}/deesh-FreeDOS-v2.5.iso
+boot || goto custom_menu
+
+# sanboot exposes the ISO as an emulated CD-ROM, so a Linux live image can still
+# find its own media -- memdisk's raw mapping often breaks that. BIOS mode only
+# (sanboot leans on INT 13h); the memdisk line below is the UEFI fallback and
+# only works if the image can boot without locating its source device.
+:deesh_linux
+imgfree
+iseq ${platform} efi && goto deesh_linux_memdisk ||
+sanboot ${custom_base}/deesh-Linux-v2.3.iso || goto custom_menu
+:deesh_linux_memdisk
+kernel ${memdisk} iso raw
+initrd ${custom_base}/deesh-Linux-v2.3.iso
+boot || goto custom_menu
+
+# No HTTP host handy? Put the ISOs on a Ventoy stick and hand off to it -- Ventoy
+# shows its own menu from there. 0x81 is the first drive after the internal one;
+# try 0x82/0x80 if the R720xd enumerates the stick differently.
+:usb_boot
+sanboot --no-describe --drive 0x81 || sanboot --no-describe --drive 0x82 || goto custom_menu
 
 # --- Alpine rescue -----------------------------------------------------------
 # Diskless netboot: nothing touches local storage. Once booted:
