@@ -1,12 +1,92 @@
 #!ipxe
-###
-### netboot.xyz-custom menu
-###
+# Custom menu: Dell PowerEdge R720xd (12G) bare-metal tooling.
+#
+# Generic tools (Memtest86+, GParted, Clonezilla, Rescuezilla, ShredOS, HDT, UBCD)
+# are NOT duplicated here -- netboot.xyz already ships them under Utilities.
+# This menu only carries what upstream lacks: Dell-specific images and a
+# rescue shell tuned for this hardware.
 
-:start
-echo Hello world!
-sleep 10
-goto custom_exit
+# --- config ------------------------------------------------------------------
+# Dell publishes SBUU/OMSA/DUP behind per-service-tag lookups with no stable
+# public URL, so these must be mirrored. Point this at your own HTTP server.
+set custom_base https://your-server/dell
+
+# Alpine netboot mirror (stable, versioned path). Bump alpine_ver as releases land.
+set alpine_ver 3.23
+set alpine_mirror https://dl-cdn.alpinelinux.org/alpine
+set alpine_netboot ${alpine_mirror}/v${alpine_ver}/releases/x86_64/netboot
+
+# iDRAC7 Serial-Over-LAN on 12G defaults to COM2 => ttyS1 @ 115200.
+# If your BIOS has console redirection on COM1, change to ttyS0.
+set dell_console console=tty0 console=ttyS1,115200n8
+
+# --- menu --------------------------------------------------------------------
+:custom_menu
+menu Dell PowerEdge tools (R720xd / 12G)
+item --gap -- Firmware and configuration
+item dell_dup            Dell Update Packages (FreeDOS) -- BIOS/iDRAC/PERC flashing
+item dell_sbuu           Systems Build and Update Utility (SBUU)
+item dell_omsa           OpenManage Server Administrator Live
+item freedos             FreeDOS 1.4 LiveCD (bare, no DUPs)
+item --gap -- Diagnostics and rescue
+item alpine_rescue       Alpine Linux rescue shell (smartctl / nvme-cli / megacli)
+item alpine_rescue_ssh   Alpine rescue + SSH daemon (headless)
+item --gap --
+item custom_exit         Back to netboot.xyz main menu
+choose --default alpine_rescue custom_choice || goto custom_exit
+goto ${custom_choice}
+
+# --- Dell images -------------------------------------------------------------
+# Build this ISO yourself: FreeDOS + a FAT partition holding the .exe DUPs you
+# need, then run them from the DOS prompt. DUPs are 16-bit DOS binaries, so this
+# path is legacy-BIOS only -- set the R720xd to BIOS boot mode before flashing.
+:dell_dup
+iseq ${platform} efi && echo Dell DUP flashing requires legacy BIOS boot mode && sleep 5 && goto custom_menu ||
+imgfree
+kernel ${memdisk} iso raw
+initrd ${custom_base}/freedos-dup.iso
+boot || goto custom_menu
+
+# SBUU: PERC/RAID setup, OS deployment, firmware bundles. 12G is the last
+# generation SBUU supports (Dell dropped it for 13G+ in favor of Lifecycle Controller).
+:dell_sbuu
+imgfree
+kernel ${memdisk} iso raw
+initrd ${custom_base}/sbuu.iso
+boot || goto custom_menu
+
+:dell_omsa
+imgfree
+kernel ${memdisk} iso raw
+initrd ${custom_base}/omsa-live.iso
+boot || goto custom_menu
+
+:freedos
+iseq ${platform} efi && echo FreeDOS requires legacy BIOS mode && sleep 5 && goto custom_menu ||
+imgfree
+kernel ${memdisk} iso raw
+initrd ${custom_base}/FD14-LiveCD.iso
+boot || goto custom_menu
+
+# --- Alpine rescue -----------------------------------------------------------
+# Diskless netboot: nothing touches local storage. Once booted:
+#   apk add smartmontools nvme-cli lshw pciutils dmidecode nwipe hdparm
+#   apk add megacli   # PERC H710/H710P, from Dell's repo or a mirror
+:alpine_rescue
+imgfree
+kernel ${alpine_netboot}/vmlinuz-lts initrd=initramfs-lts modules=loop,squashfs alpine_repo=${alpine_mirror}/v${alpine_ver}/main modloop=${alpine_netboot}/modloop-lts ip=dhcp ${dell_console}
+initrd ${alpine_netboot}/initramfs-lts
+boot || goto custom_menu
+
+# Same, but pulls an apkovl overlay so the box comes up with sshd running and your
+# key installed -- work over the network instead of the iDRAC virtual console.
+# Build the overlay on a running Alpine with `lbu package rescue.apkovl.tar.gz`
+# after setting up /root/.ssh/authorized_keys and `rc-update add sshd`.
+:alpine_rescue_ssh
+imgfree
+kernel ${alpine_netboot}/vmlinuz-lts initrd=initramfs-lts modules=loop,squashfs alpine_repo=${alpine_mirror}/v${alpine_ver}/main modloop=${alpine_netboot}/modloop-lts ip=dhcp ${dell_console} apkovl=${custom_base}/rescue.apkovl.tar.gz
+initrd ${alpine_netboot}/initramfs-lts
+boot || goto custom_menu
 
 :custom_exit
 exit 0
